@@ -215,3 +215,65 @@ test('deadline: grpc-timeout aborts the call signal', async function (t) {
   await new Promise(function (resolve) { setTimeout(resolve, 100) })
   assert.equal(deadlineExceeded, true)
 })
+
+test('unhandled non-GrpcError closes with 13 INTERNAL, message suppressed in production', async function (t) {
+  var originalEnv = process.env.NODE_ENV
+  process.env.NODE_ENV = 'production'
+
+  var ctx = await startGreeter(function (app) {
+    app.set('env', 'production')
+    app.use(function () {
+      throw new Error('a secret stack trace detail')
+    })
+  })
+
+  t.after(function () {
+    process.env.NODE_ENV = originalEnv
+    return ctx.close()
+  })
+
+  await assert.rejects(
+    new Promise(function (resolve, reject) {
+      ctx.client.SayHello({ name: 'world' }, function (err, response) {
+        if (err) reject(err)
+        else resolve(response)
+      })
+    }),
+    function (err) {
+      assert.equal(err.code, grpcJs.status.INTERNAL)
+      assert.equal(err.details, 'Internal server error')
+      return true
+    }
+  )
+})
+
+test('client cancellation aborts call.signal on the server', async function (t) {
+  var aborted = false
+
+  var ctx = await startGreeter(function (app) {
+    app.use(function (call) {
+      call.signal.addEventListener('abort', function () {
+        aborted = true
+      })
+      // never respond -- the client will cancel before we do
+    })
+  })
+
+  t.after(ctx.close)
+
+  var pending = new Promise(function (resolve) {
+    var call = ctx.client.SayHello({ name: 'world' }, function (err) {
+      resolve(err)
+    })
+
+    setTimeout(function () { call.cancel() }, 20)
+  })
+
+  var err = await pending
+
+  assert.ok(err)
+  assert.equal(err.code, grpcJs.status.CANCELLED)
+
+  await new Promise(function (resolve) { setTimeout(resolve, 20) })
+  assert.equal(aborted, true)
+})
