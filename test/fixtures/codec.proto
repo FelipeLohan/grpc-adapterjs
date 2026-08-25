@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package codec;
+
+message Numbers {
+  int64 big = 1;
+  bytes data = 2;
+}
