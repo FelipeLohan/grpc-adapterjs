@@ -56,6 +56,14 @@ function fakeStream () {
     return destination
   }
 
+  stream.unpipe = function unpipe () {
+    return stream
+  }
+
+  stream.resume = function resume () {
+    return stream
+  }
+
   stream.sendTrailers = function sendTrailers (trailers) {
     stream.trailers = trailers
     stream.destroyed = true

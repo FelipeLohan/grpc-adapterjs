@@ -432,3 +432,131 @@ test('client cancellation during a serverStream aborts call.signal and stops fur
 
   assert.equal(aborted, true)
 })
+
+test('call.writer() adapts write()/end() into a real stream.Writable for pipeline()', async function (t) {
+  var streamModule = require('node:stream')
+  var pipeline = require('node:util').promisify(streamModule.pipeline)
+  var Readable = streamModule.Readable
+
+  var ctx = await startGreeter(function (app) {
+    app.serverStream('/helloworld.Greeter/LotsOfReplies', async function (call) {
+      var req = decodeHello(call.request)
+      var names = [req.name + '#0', req.name + '#1', req.name + '#2']
+
+      var source = Readable.from(names.map(function (n) { return encodeReply({ message: n }) }))
+
+      await pipeline(source, call.writer())
+    })
+  })
+
+  t.after(ctx.close)
+
+  var messages = await new Promise(function (resolve, reject) {
+    var seen = []
+    var stream = ctx.client.LotsOfReplies({ name: 'Ada' })
+
+    stream.on('data', function (chunk) { seen.push(chunk) })
+    stream.on('end', function () { resolve(seen) })
+    stream.on('error', reject)
+  })
+
+  assert.deepEqual(messages.map(function (m) { return m.message }), ['Ada#0', 'Ada#1', 'Ada#2'])
+})
+
+test('breaking out of "for await" early calls the iterator\'s return() and does not hang', async function (t) {
+  var ctx = await startGreeter(function (app) {
+    app.clientStream('/helloworld.Greeter/LotsOfGreetings', async function (call) {
+      var seen = []
+
+      for await (var chunk of call) {
+        seen.push(decodeHello(chunk).name)
+        if (seen.length === 2) break
+      }
+
+      call.send(encodeReply({ message: seen.join(',') }))
+    })
+  })
+
+  t.after(ctx.close)
+
+  var reply = await new Promise(function (resolve, reject) {
+    var stream = ctx.client.LotsOfGreetings(function (err, response) {
+      if (err) reject(err)
+      else resolve(response)
+    })
+
+    stream.write({ name: 'a' })
+    stream.write({ name: 'b' })
+    stream.write({ name: 'c' })
+    stream.end()
+  })
+
+  assert.equal(reply.message, 'a,b')
+})
+
+test('a deadline exceeded while blocked on "for await" rejects the iteration', async function (t) {
+  var ctx = await startGreeter(function (app) {
+    app.clientStream('/helloworld.Greeter/LotsOfGreetings', async function (call) {
+      try {
+        for await (var _chunk of call) { /* wait forever -- client never writes */ }
+      } catch (err) {
+        call.fail(err)
+      }
+    })
+  })
+
+  t.after(ctx.close)
+
+  await assert.rejects(
+    new Promise(function (resolve, reject) {
+      var deadline = new Date(Date.now() + 50)
+      var stream = ctx.client.LotsOfGreetings({ deadline: deadline }, function (err, response) {
+        if (err) reject(err)
+        else resolve(response)
+      })
+
+      // deliberately never write or end -- the server waits on an empty iterator
+    })
+  )
+})
+
+test('an error thrown mid-bidi-stream closes the call with that status', async function (t) {
+  var ctx = await startGreeter(function (app) {
+    app.bidi('/helloworld.Greeter/BidiHello', async function (call) {
+      var count = 0
+
+      for await (var chunk of call) {
+        count++
+
+        if (count === 2) {
+          call.fail(new (require('../lib/status').GrpcError)(status.FAILED_PRECONDITION, 'stop at 2'))
+          return
+        }
+
+        call.write(encodeReply({ message: decodeHello(chunk).name.toUpperCase() }))
+      }
+    })
+  })
+
+  t.after(ctx.close)
+
+  var received = []
+  var failure
+
+  await new Promise(function (resolve) {
+    var stream = ctx.client.BidiHello()
+
+    stream.on('data', function (chunk) { received.push(chunk) })
+    stream.on('error', function (err) { failure = err; resolve() })
+    stream.on('end', resolve)
+
+    stream.write({ name: 'ada' })
+    stream.write({ name: 'grace' })
+    stream.write({ name: 'linus' })
+    stream.end()
+  })
+
+  assert.deepEqual(received.map(function (m) { return m.message }), ['ADA'])
+  assert.ok(failure)
+  assert.equal(failure.code, grpcJs.status.FAILED_PRECONDITION)
+})
