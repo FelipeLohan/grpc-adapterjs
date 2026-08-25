@@ -16,7 +16,8 @@ function fakeCall (path) {
   return {
     path: path,
     cancelled: false,
-    signal: { aborted: false }
+    signal: { aborted: false },
+    bufferRequest: function () { return Promise.resolve() }
   }
 }
 

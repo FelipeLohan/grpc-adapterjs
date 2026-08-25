@@ -52,6 +52,10 @@ function fakeStream () {
     else stream.destroyed = true
   }
 
+  stream.pipe = function pipe (destination) {
+    return destination
+  }
+
   stream.sendTrailers = function sendTrailers (trailers) {
     stream.trailers = trailers
     stream.destroyed = true

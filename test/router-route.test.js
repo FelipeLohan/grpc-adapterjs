@@ -11,6 +11,17 @@ var assert = require('node:assert/strict')
 var Route = require('../lib/router/route')
 var errorHandler = require('../lib/router/error-handler').errorHandler
 
+/**
+ * A minimal call double: just enough for Route.dispatch to run. Unary/
+ * serverStream routes await `bufferRequest()` before starting the stack
+ * (plan §6.3), so every fake call here resolves it immediately -- the
+ * buffering behavior itself is covered by the call.js tests instead.
+ */
+
+function fakeCall () {
+  return { bufferRequest: function () { return Promise.resolve() } }
+}
+
 test('a route serves exactly one call type; a second, different type throws', function () {
   var route = new Route('/helloworld.Greeter/SayHello')
 
@@ -21,31 +32,33 @@ test('a route serves exactly one call type; a second, different type throws', fu
   }, /already registered as "unary"/)
 })
 
-test('.any() runs regardless of the route\'s registered type', function () {
+test('.any() runs regardless of the route\'s registered type', function (t, done) {
   var order = []
 
   var route = new Route('/helloworld.Greeter/SayHello')
 
   route.any(function (call, next) { order.push('any'); next() })
-  route.unary(function (call) { order.push('unary'); call.type = route.type })
+  route.unary(function (call, next) { order.push('unary'); next() })
 
-  route.dispatch({}, function () {})
-
-  assert.deepEqual(order, ['any', 'unary'])
+  route.dispatch(fakeCall(), function () {
+    assert.deepEqual(order, ['any', 'unary'])
+    done()
+  })
 })
 
-test('dispatch() sets call.type before running any handler', function () {
+test('dispatch() sets call.type before running any handler', function (t, done) {
   var seen
 
   var route = new Route('/helloworld.Greeter/LotsOfReplies')
-  route.serverStream(function (call) { seen = call.type })
+  route.serverStream(function (call, next) { seen = call.type; next() })
 
-  route.dispatch({}, function () {})
-
-  assert.equal(seen, 'serverStream')
+  route.dispatch(fakeCall(), function () {
+    assert.equal(seen, 'serverStream')
+    done()
+  })
 })
 
-test('a thrown error skips remaining normal handlers and reaches an error handler', function () {
+test('a thrown error skips remaining normal handlers and reaches an error handler', function (t, done) {
   var order = []
 
   var route = new Route('/helloworld.Greeter/SayHello')
@@ -61,14 +74,14 @@ test('a thrown error skips remaining normal handlers and reaches an error handle
     next(err)
   }))
 
-  route.dispatch({}, function (err) {
+  route.dispatch(fakeCall(), function (err) {
     order.push('done:' + err.message)
+    assert.deepEqual(order, ['h1', 'h2-throws', 'error:boom', 'done:boom'])
+    done()
   })
-
-  assert.deepEqual(order, ['h1', 'h2-throws', 'error:boom', 'done:boom'])
 })
 
-test('next("route") bails out of the route without treating it as an error', function () {
+test('next("route") bails out of the route without treating it as an error', function (t, done) {
   var order = []
 
   var route = new Route('/helloworld.Greeter/SayHello')
@@ -78,11 +91,11 @@ test('next("route") bails out of the route without treating it as an error', fun
     function () { order.push('h2-never-runs') }
   )
 
-  route.dispatch({}, function (err) {
+  route.dispatch(fakeCall(), function (err) {
     order.push('done:' + err)
+    assert.deepEqual(order, ['h1', 'done:undefined'])
+    done()
   })
-
-  assert.deepEqual(order, ['h1', 'done:undefined'])
 })
 
 test('router.route(path) called twice returns the same Route', function () {
@@ -96,7 +109,7 @@ test('router.route(path) called twice returns the same Route', function () {
   assert.equal(router.stack.length, 1)
 })
 
-test('a bare arity-3 function is detected as an error handler without grpc.errorHandler()', function () {
+test('a bare arity-3 function is detected as an error handler without grpc.errorHandler()', function (t, done) {
   var order = []
 
   var route = new Route('/helloworld.Greeter/SayHello')
@@ -104,7 +117,9 @@ test('a bare arity-3 function is detected as an error handler without grpc.error
   route.unary(function () { throw new Error('boom') })
   route.any(function (err, call, next) { order.push('bare-arity-3:' + err.message); next(err) })
 
-  route.dispatch({}, function (err) { order.push('done:' + err.message) })
-
-  assert.deepEqual(order, ['bare-arity-3:boom', 'done:boom'])
+  route.dispatch(fakeCall(), function (err) {
+    order.push('done:' + err.message)
+    assert.deepEqual(order, ['bare-arity-3:boom', 'done:boom'])
+    done()
+  })
 })
