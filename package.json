@@ -4,7 +4,7 @@
   "description": "Express DX for native gRPC over node:http2 — no @grpc/grpc-js, no C++ bindings",
   "main": "index.js",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">= 20"
