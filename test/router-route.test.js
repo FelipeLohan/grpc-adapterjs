@@ -95,3 +95,16 @@ test('router.route(path) called twice returns the same Route', function () {
   assert.equal(a, b)
   assert.equal(router.stack.length, 1)
 })
+
+test('a bare arity-3 function is detected as an error handler without grpc.errorHandler()', function () {
+  var order = []
+
+  var route = new Route('/helloworld.Greeter/SayHello')
+
+  route.unary(function () { throw new Error('boom') })
+  route.any(function (err, call, next) { order.push('bare-arity-3:' + err.message); next(err) })
+
+  route.dispatch({}, function (err) { order.push('done:' + err.message) })
+
+  assert.deepEqual(order, ['bare-arity-3:boom', 'done:boom'])
+})
